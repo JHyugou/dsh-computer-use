@@ -166,7 +166,12 @@ export class NativeBridge {
           (this.#stderrLines.length > 0 ? `\nlast diagnostics:\n${this.diagnostics}` : ''),
       ))
     }, this.#startupTimeoutMs)
-    if (typeof timer.unref === 'function') timer.unref()
+    // **不要 unref**：调用方正在等这个定时器给出的失败结果。
+    // unref 的语义是「不阻止进程退出」，于是在没有别的句柄的进程里，事件循环先空掉、
+    // 进程带着未 settle 的 await 退出：
+    //   `Promise resolution is still pending but the event loop has already resolved`
+    // 这个缺陷在本地被其它句柄掩盖，是 CI（windows-latest / Node 22）先暴露出来的。
+    // 复盘：docs/reverse-engineering.md「CI 抓到的第一个真 bug」。
 
     child.stdout?.setEncoding?.('utf8')
     child.stdout?.on?.('data', (chunk) => this.#onStdout(chunk))
@@ -331,7 +336,7 @@ export class NativeBridge {
           this.#kill()
           reject(new BridgeError('TIMEOUT', `computer-use backend did not answer ${cmd} within ${timeoutMs} ms`))
         }, timeoutMs)
-        if (typeof timer.unref === 'function') timer.unref()
+        // **不要 unref**：超时的 reject 正是调用方在等的结果。见 #start 里同一处注释。
         const onAbort = () => {
           if (settled) return
           settle()
@@ -404,7 +409,8 @@ export class NativeBridge {
       }
       await new Promise((resolve) => {
         const timer = setTimeout(() => resolve(undefined), 600)
-        if (typeof timer.unref === 'function') timer.unref()
+        // 同上：这 600ms 是 dispose 的兜底上限，不能被 unref 掉，
+        // 否则进程可能在等它的过程中就直接退出了。
         if (this.#exitInfo !== null) {
           clearTimeout(timer)
           resolve(undefined)
