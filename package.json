@@ -1,0 +1,63 @@
+{
+  "name": "dsh-computer-use",
+  "version": "0.1.0",
+  "description": "Computer Use：把 ZCode 的电脑控制能力（应用/窗口/界面元素读写、截图、鼠标键盘、剪贴板）重建为 DSH 插件。桌面自动化，Windows 原生后端。",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "win32"
+  ],
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "skills",
+    "docs",
+    "tools",
+    "cordis.patch.yml",
+    "LICENSE",
+    "NOTICE.md",
+    "README.md"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "computer-use",
+    "cua",
+    "desktop-automation",
+    "ui-automation",
+    "screenshot",
+    "windows"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JHyugou/dsh-computer-use.git"
+  },
+  "homepage": "https://github.com/JHyugou/dsh-computer-use",
+  "bugs": {
+    "url": "https://github.com/JHyugou/dsh-computer-use/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "check": "node --check src/index.js && node --check src/bridge.js && node --check src/tools.js && node --check src/schema.js && node --check src/format.js && node --check src/config.js && node --check src/skill.js && node --check src/indicator.js",
+    "test": "node --test \"test/*.test.mjs\"",
+    "ref:validator": "node tools/ref-extract-validator.mjs",
+    "smoke": "node tools/native-smoke.mjs",
+    "e2e": "node tools/e2e.mjs",
+    "verify:registry": "node tools/verify-real-registry.mjs",
+    "verify:in-dsh": "node tools/verify-in-dsh.mjs",
+    "install:plugin": "node tools/install-plugin.mjs",
+    "install-skill": "node tools/install-skill.mjs",
+    "indicator:smoke": "node tools/indicator-smoke.mjs"
+  }
+}

@@ -1,0 +1,6 @@
+# 开发期从 DSH 的 app.asar 提取出来的官方实现，只用于本地交叉验证，不随包发布。
+# 重新生成：node tools/ref-extract-validator.mjs
+.ref/
+
+node_modules/
+*.log
