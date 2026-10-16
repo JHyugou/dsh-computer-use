@@ -469,8 +469,53 @@ test('/computer-use：纯读状态既不写盘也不改状态', async () => {
   assert.equal((await readConfig()).accessMode, 'auto', '读状态不该写盘')
 })
 
-test('/computer-use：审批可用时，询问模式在真实注册路径上放行', async () => {
-  const homeDir = await freshHome()
+// ---------------------------------------------------------------------------
+// request_access 自报访问设置（运行时可自查）
+// ---------------------------------------------------------------------------
+
+/** 造一个够用的假运行时（只覆盖 request_access 需要的部分）。 */
+function accessRuntime(report) {
+  return {
+    longTimeoutMs: 60000,
+    async call(cmd) {
+      if (cmd === 'screen_info') return { monitors: [{ id: 1 }], virtual: { width: 2560, height: 1600 } }
+      return {}
+    },
+    async probe() {
+      return { ok: true, info: { protocol: 'dsh-cua/1', dpiAware: true } }
+    },
+    ...(report === undefined ? {} : { accessReport: () => report }),
+    defaultScreenshotArgs: () => ({}),
+    screenshotBudget: () => 524288,
+    jpegQuality: () => 80,
+    async saveFrame() {},
+    async attachImage() {},
+  }
+}
+
+test('request_access：把当前访问设置一起报出来（界面改了设置，这里立刻能看出来）', async () => {
+  const { createToolDefinitions } = await import('../src/tools.js')
+  const { native } = createToolDefinitions(
+    accessRuntime({ mode: 'off', allowSubagents: false, label: '电脑操控：禁用（仅主 Agent）' }),
+  )
+  const requestAccess = native.find((definition) => definition.name === 'request_access')
+  const result = await requestAccess.execute({}, {})
+  assert.equal(result.access.mode, 'off')
+  assert.equal(result.access.allowSubagents, false)
+  assert.match(result.text, /access_mode="off" subagents="blocked"/u)
+  assert.match(result.text, /电脑操控访问设置：电脑操控：禁用（仅主 Agent）/u)
+})
+
+test('request_access：没有访问报告时保持向后兼容（不出现 access 行）', async () => {
+  const { createToolDefinitions } = await import('../src/tools.js')
+  const { native } = createToolDefinitions(accessRuntime(undefined))
+  const requestAccess = native.find((definition) => definition.name === 'request_access')
+  const result = await requestAccess.execute({}, {})
+  assert.equal(result.access, undefined)
+  assert.doesNotMatch(result.text, /access_mode/u)
+})
+
+test('/computer-use：审批可用时，询问模式在真实注册路径上放行', async () => {  const homeDir = await freshHome()
   const approval = fakeApproval('allowed-once')
   const { ctx } = await applyWithCommands({
     settings: { accessMode: 'ask', allowSubagents: true },

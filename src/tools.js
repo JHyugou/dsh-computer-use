@@ -277,12 +277,14 @@ export function createToolDefinitions(runtime) {
     parameters: objectSchema({}),
     output: textOutputSchema({}),
     async handler() {
+      const access = runtime.accessReport?.()
       const probe = await runtime.probe()
       if (probe.ok !== true) {
         return {
           ready: false,
           platform: process.platform,
           backend: 'powershell-native',
+          ...(access === undefined ? {} : { access }),
           notes: [
             `Backend is not available: ${probe.reason}`,
             'Nothing can be observed or controlled until this is fixed.',
@@ -291,6 +293,7 @@ export function createToolDefinitions(runtime) {
             platform: process.platform,
             backend: 'unavailable',
             ready: false,
+            ...(access === undefined ? {} : { access }),
             notes: [`Backend is not available: ${probe.reason}`],
           }),
         }
@@ -313,6 +316,7 @@ export function createToolDefinitions(runtime) {
         screen: info.virtual,
         screenCapture: capture,
         inputControl: 'granted',
+        ...(access === undefined ? {} : { access }),
         text: formatAccess({
           platform: process.platform,
           backend,
@@ -322,6 +326,7 @@ export function createToolDefinitions(runtime) {
           screen: info.virtual,
           screenCapture: capture,
           inputControl: 'granted',
+          ...(access === undefined ? {} : { access }),
           notes: [
             'Windows desktop backend (PowerShell + UI Automation). No macOS-style permission grant is required on Windows.',
             'Coordinates for input tools are raster pixels of the most recent screenshot, unless space="screen".',

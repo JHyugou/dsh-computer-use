@@ -209,9 +209,20 @@ export async function apply(ctx, inlineConfig) {
       return result
     },
 
-    /** 截图默认参数。 */
-    defaultScreenshotArgs() {
+    /**
+     * 访问设置自报（`request_access` 用）。
+     * 让模型知道「此刻允不允许」，也让诊断有据可查：界面改了设置，这里立刻能看到。
+     */
+    accessReport() {
       return {
+        mode: accessState.accessMode,
+        allowSubagents: accessState.allowSubagents === true,
+        label: describeSettings(accessState),
+      }
+    },
+
+    /** 截图默认参数。 */
+    defaultScreenshotArgs() {      return {
         ...(config.screenshotMaxWidth > 0 ? { max_width: config.screenshotMaxWidth } : {}),
         format: config.screenshotFormat,
         ...(config.screenshotFormat === 'jpeg' ? { quality: config.screenshotQuality } : {}),

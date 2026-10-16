@@ -85,9 +85,22 @@ export function formatAccess(data) {
   }
   lines.push(`screen_capture="${quote(data.screenCapture ?? 'unknown')}"`)
   lines.push(`input_control="${quote(data.inputControl ?? 'unknown')}"`)
+  // 访问设置也报出来：模型据此知道「用户此刻允不允许」，同时它也是**运行时可自查**的凭据——
+  // 用户在菜单里改了设置，这里立刻能看出来（诊断「界面改了但没生效」时省一大圈）。
+  if (data.access !== undefined) {
+    lines.push(
+      `access_mode="${quote(data.access.mode)}"${attr(
+        'subagents',
+        data.access.allowSubagents === true ? 'allowed' : 'blocked',
+      )}`,
+    )
+  }
   lines.push(`</computer-use>`)
   if (Array.isArray(data.notes) && data.notes.length > 0) {
     for (const note of data.notes) lines.push(`- ${note}`)
+  }
+  if (data.access !== undefined) {
+    lines.push(`- 电脑操控访问设置：${data.access.label}`)
   }
   return lines.join('\n')
 }
