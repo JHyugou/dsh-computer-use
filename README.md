@@ -111,14 +111,18 @@ DSH 的「插件」页 → 从路径安装 → 选择本目录
 cd <本仓库目录>
 
 node tools/ref-extract-validator.mjs   # 从 app.asar 提取官方实现到 .ref/（开发期依赖，可选）
-npm test                               # 64 通过：单元 + 与官方实现的等价性交叉验证（含无损 JSON 闸门）
+npm test                               # 95 通过：单元 + 与官方实现的等价性交叉验证（含访问闸门矩阵）
 npm run smoke                          # 147 通过：原生后端 24 个协议方法（真机）
-npm run e2e                            # 66 通过：完整链路端到端（真机，注入到自家夹具窗口）
+npm run e2e                            # 74 通过：完整链路端到端（真机，含访问闸门验收）
 npm run indicator:smoke                # 54 通过：操作指示器三条硬性质（真机，见下）
 npm run verify:registry                # 10 通过：真实 cordis + 真实 dsh-tools 注册表加载
 npm run verify:in-dsh                  # 14 通过：真实 DSH 里让模型自己点一次按钮
 node tools/install-skill.mjs status    # 技能是否已进用户技能根
 ```
+
+> `npm run verify:in-dsh` 需要**模型账号可用**。若 provider 返回 `402 Insufficient
+> Balance`，这一层会因为「模型压根没跑起来」而全红——那不是插件的失败，看日志里的
+> `error.code === "QUOTA"` 就能区分。
 
 `npm run indicator:smoke` 的两条判据（退出码 `0` 通过 / `1` 产品失败 / `2` 环境不稳定无法判定）：
 
@@ -169,6 +173,8 @@ node tools/install-plugin.mjs --rollback         # 从备份恢复
 | `tools` | `"native"` | `native` = 25 个独立工具；`single` = 一个 `computer_use`（带 `action`），省 schema token |
 | `warmup` | `true` | 加载时预热后端；关掉则首次调用才拉起（多等约 1-2 秒冷启动） |
 | `installSkill` | `true` | 把随包技能装到 `<dsh home>/skills/computer-use/`（带所有权标记，不覆盖用户自写版本） |
+| `accessMode` | `"auto"` | 谁能调用电脑操控：`auto` 全自动 / `ask` 每次弹审批 / `off` 禁用（见 §5.4） |
+| `allowSubagents` | `false` | 是否允许**子代理**调用电脑操控（默认关闭：子代理动用户鼠标键盘时用户看不见也难喊停） |
 | `indicator` | `true` | 是否显示屏幕最前端的「DSH 正在操作电脑」浮层（见 §5.5） |
 | `indicatorLocale` | `"auto"` | 浮层文案语言：`auto` / `zh-CN` / `en-US` |
 | `indicatorShowAction` | `true` | 文案后是否带上当前动作（「· 正在点击」） |
@@ -246,6 +252,44 @@ Node 侧控制器在 [src/indicator.js](src/indicator.js)。**指示器的任何
 
 ---
 
+### 5.4 访问控制：谁能调用电脑操控
+
+Computer Use 真的会动用户的鼠标键盘，所以**必须有一个用户随手能关的闸门**。输入框那一行
+（紧挨「完全权限」芯片）有一个 **「🖱 电脑操控：全自动」** 按钮，点开是一个菜单：
+
+| 设置 | 选项 | 含义 |
+|---|---|---|
+| 允许子代理调用 | 开 / 关（默认关） | 关掉后**子代理一律拒绝**——它们跑在用户看不到的上下文里，一次委派里可能反复调用 |
+| 模式 | **全自动** | 有需求就直接执行 |
+| | **需要询问** | 每次调用前弹出 DSH 原生审批面板，只有用户点「允许一次」才执行 |
+| | **禁用** | 完全关闭：主 Agent 与子代理都拿不到执行权（连截图等只读动作也不放行） |
+
+**闸门在宿主侧、每次调用都判**（[src/access.js](src/access.js)），所以：
+
+* 设置改完**立即生效**，不需要重启 DSH；
+* 界面上禁用了、模型照样能调——这种情况不存在：执行权压根到不了后端；
+* 判定不出来的一律**拒绝**（fail-closed），并且被拒绝的调用**不会点亮操作指示器**
+  （屏幕上什么都没发生却显示「DSH 正在操作电脑」就是在骗人）。
+
+设计上的两个取舍，写在这里以免被当成 bug：
+
+1. **模式是「插件级」的，不是「每会话」的**。DSH 的会话投影（permission preset 用的那套）
+   需要 schema 与事件 reducer，而本插件刻意零依赖，所以设置落在
+   `<dsh home>/plugins/dsh-computer-use/config.json`，全局生效。
+2. **「需要询问」依赖 DSH 的权限预设**。若当前预设是「完全权限」（不询问那档），
+   `approval/request` 会被直接判为 `rejected`——于是电脑操控**全部被拒**。
+   这是刻意的 fail-closed，错误消息里会告诉用户怎么改（切权限预设，或把模式改回「全自动」）。
+
+也可以用命令改（GUI 菜单提交的就是它）：
+
+```
+/computer-use                          # 看当前设置
+/computer-use mode ask                 # 需要询问
+/computer-use mode=off subagents=on    # 也可以一次提交两个字段
+```
+
+---
+
 ## 6. 与上游的差异
 
 | 上游 ZCode | 本插件 |
@@ -307,8 +351,10 @@ src/schema.js       JSON Schema 子集校验（与官方同文案）+ 无损宽�
 src/format.js       模型面信封、错误提示、app-associations 元数据
 src/bridge.js       NDJSON 客户端（串行/超时换进程/重启上限）
 src/config.js       配置与路径约定
+src/access.js       访问闸门（模式/子代理判定，纯函数，含命令参数解析）
 src/skill.js        技能自安装（带所有权标记）
 src/indicator.js    操作指示器控制器（30s 兜底隐藏、失败不冒泡）
+lib/client.js       浏览器半：输入框那一行的「电脑操控」按钮与设置菜单
 src/native/cua.ps1  Windows 原生后端（协议见 docs/native-protocol.md）
 src/native/indicator.ps1  置顶操作指示器浮窗（协议见 docs/indicator-protocol.md）
 
@@ -320,7 +366,7 @@ docs/indicator-preview-dark.png  指示器预览（深色）
 docs/zcode-cua-contract.md     上游契约逆向取证（带行号证据）
 docs/reverse-engineering.md    逆向复盘：决策、验证强度、未竟项
 
-test/                          64 个单测（schema / bridge / tools / plugin / skill / indicator）
+test/                          95 个单测（schema / bridge / tools / plugin / skill / indicator / access / client）
 test/helpers.mjs               假子进程、假 ctx、官方实现加载器
 
 tools/native-smoke.mjs         原生后端协议冒烟（真机，147 断言）

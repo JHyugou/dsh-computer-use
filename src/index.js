@@ -20,12 +20,23 @@ import { basename, join } from 'node:path'
 
 import { NativeBridge, BridgeError, BridgeUnavailableError } from './bridge.js'
 import {
+  AccessDeniedError,
+  classifyCaller,
+  decideAccess,
+  describeSettings,
+  interpretApprovalOutcome,
+  parseCommandArguments,
+  settingsPayload,
+} from './access.js'
+import {
   DEFAULT_CONFIG,
+  configPath,
   framesDir,
   indicatorScriptPath,
   nativeScriptPath,
   normalizeConfig,
   readConfig,
+  writeConfig,
 } from './config.js'
 import { OperationIndicator, detectLocale } from './indicator.js'
 import { createToolDefinitions } from './tools.js'
@@ -39,17 +50,21 @@ export const name = 'dsh-computer-use'
 export const inject = ['tools']
 
 /**
- * 注册前的统一包装：参数校验（含无损宽化）+ 输出清洗 + 操作指示器。
+ * 注册前的统一包装：访问闸门 + 参数校验（含无损宽化）+ 输出清洗 + 操作指示器。
  *
  * 导出是为了让测试走**与生产完全相同的路径**——真机验证（`dsh headless` 里让模型
  * 真的点一次按钮）抓到的 `tool "left_click" returned invalid output: value is not
  * lossless JSON` 就发生在这里：当时测试只调 handler 本身，绕过了这一层。
+ *
+ * 闸门放在最前面：被拒绝的调用**不该**点亮操作指示器（屏幕上什么都没发生，
+ * 却让用户看到「DSH 正在操作电脑」，那是在骗人）。
  * @param definition 工具定义（`parameters` + `execute`）
  * @param [indicator] 操作指示器；`note()` 是同步 fire-and-forget，不会拖慢工具
  * @param [resolveToolName] 从入参解析出用于文案的动作名（`single` 模式下动作在 `args.action`）
+ * @param [access] 访问闸门：`{read(), approval?}`；缺失时按「全自动 + 不允许子代理」处理
  * @returns 注册用的 execute；入参先宽化校验，返回值先清洗成无损 JSON
  */
-export function createGuardedExecute(definition, indicator, resolveToolName) {
+export function createGuardedExecute(definition, indicator, resolveToolName, access) {
   const args = definition.parameters
   const invoke = definition.execute
   const toolName = definition.name
@@ -57,6 +72,9 @@ export function createGuardedExecute(definition, indicator, resolveToolName) {
     const coerced = coerceArgs(args, rawArgs ?? {})
     assertArgs(args, coerced)
     const label = resolveToolName === undefined ? toolName : resolveToolName(coerced)
+
+    await enforceAccess({ access, label, exec })
+
     // 指示器在动作**开始前**就亮起（用户要看到的是「正在操作」，不是「刚操作过」）。
     // `stop_computer_control` 例外：它表达的是控制权已交还，指示器会立刻收起。
     indicator?.note?.(label, { terminal: label === 'stop_computer_control' })
@@ -64,6 +82,55 @@ export function createGuardedExecute(definition, indicator, resolveToolName) {
     // （看起来像工具失败，实际桌面已经动了），所以清洗必须在这一层兜住。
     return toLosslessJson(await invoke(coerced, exec))
   }
+}
+
+/**
+ * 执行访问闸门；不放行就抛 {@link AccessDeniedError}（不返回「成功但被拒绝」的结果，
+ * 因为那样模型会以为动作完成了）。
+ *
+ * 「需要询问」走 DSH 原生审批：`ctx.approval.request()` 会在用户客户端弹出标准审批面板，
+ * 我们不需要（也无法）自己画一个。`allowed-once` 之外的任何结果都按拒绝处理。
+ * @param options.access 闸门（`{read(), approval?}`）
+ * @param options.label 工具/动作名（进审批面板与错误消息）
+ * @param options.exec 工具执行上下文
+ */
+async function enforceAccess({ access, label, exec }) {
+  if (access === undefined || typeof access.read !== 'function') return
+  const settings = access.read()
+  const caller = classifyCaller(exec)
+  const decision = decideAccess({
+    mode: settings.accessMode,
+    allowSubagents: settings.allowSubagents,
+    caller,
+  })
+  if (decision.effect === 'deny') throw new AccessDeniedError(decision.code, decision.message)
+  if (decision.effect !== 'ask') return
+
+  const approval = access.approval
+  if (approval === undefined || typeof approval.request !== 'function') {
+    throw new AccessDeniedError(
+      'CUA_APPROVAL_UNAVAILABLE',
+      '电脑操控设置为「需要询问」，但当前 DSH 环境没有可用的审批服务，按最小授权拒绝。' +
+        '请在输入框那一行的「电脑操控」菜单里改为「全自动」，或检查 DSH 的权限预设。',
+    )
+  }
+  let outcome
+  try {
+    outcome = await approval.request({
+      agent: exec?.agent,
+      toolName: label,
+      ...(exec?.callId === undefined ? {} : { callId: exec.callId }),
+      reason: `电脑操控请求执行「${label}」：它会真的移动鼠标/敲键盘或读取屏幕内容。`,
+      ...(exec?.signal === undefined ? {} : { signal: exec.signal }),
+    })
+  } catch (error) {
+    throw new AccessDeniedError(
+      'CUA_APPROVAL_FAILED',
+      `电脑操控的审批请求失败（${error instanceof Error ? error.message : String(error)}），已按拒绝处理。`,
+    )
+  }
+  const verdict = interpretApprovalOutcome(outcome)
+  if (verdict.allowed !== true) throw new AccessDeniedError('CUA_APPROVAL_DENIED', verdict.message)
 }
 
 /**
@@ -101,6 +168,21 @@ export async function apply(ctx, inlineConfig) {
   })
 
   const imageRouteCache = new Map()
+
+  // 访问设置的**活状态**：`/computer-use` 命令改它、闸门每次调用读它，
+  // 所以菜单里一改就立即生效，不需要重启 DSH。
+  const accessState = { accessMode: config.accessMode, allowSubagents: config.allowSubagents }
+  const access = {
+    read: () => ({ ...accessState }),
+    /** 审批服务：DSH 原生。拿不到服务时闸门会按最小授权拒绝（见 enforceAccess）。 */
+    get approval() {
+      try {
+        return typeof ctx.get === 'function' ? ctx.get('approval') : ctx.approval
+      } catch {
+        return undefined
+      }
+    },
+  }
 
   const runtime = {
     longTimeoutMs: config.screenshotTimeoutMs,
@@ -235,10 +317,18 @@ export async function apply(ctx, inlineConfig) {
       ? (rawArgs) => (typeof rawArgs?.action === 'string' ? rawArgs.action : 'computer_use')
       : undefined
   for (const definition of definitions) {
-    const guarded = { ...definition, execute: createGuardedExecute(definition, indicator, resolveToolName) }
+    const guarded = {
+      ...definition,
+      execute: createGuardedExecute(definition, indicator, resolveToolName, access),
+    }
     const dispose = ctx.tools.register(guarded)
     if (typeof dispose === 'function') disposers.push(dispose)
   }
+
+  // 「电脑操控」设置命令：GUI 输入框那一行的菜单就是提交它来实现的，
+  // 也可以手打（`/computer-use mode ask`）。设置写进插件自己的 config.json，
+  // 并同步更新内存活状态——两者一致才能既持久化又立即生效。
+  registerAccessCommand({ ctx, accessState, log })
 
   let disposed = false
   const dispose = () => {
@@ -321,6 +411,70 @@ function createLogger(ctx) {
     info: (message) => emit('info', message),
     warn: (message) => emit('warn', message),
     error: (message) => emit('error', message),
+  }
+}
+
+/**
+ * 注册 `/computer-use` 命令（GUI 菜单与手打共用同一条落盘路径）。
+ *
+ * 为什么要走命令而不是让客户端直接写文件：客户端插件跑在浏览器里，碰不到文件系统；
+ * 而「设置必须真的落到宿主侧」是这次需求的核心——界面上禁用了、宿主却照旧执行，
+ * 那是最糟的假装安全。所以客户端只提交一条命令，由宿主校验、写盘、并同步内存状态。
+ *
+ * 幂等且容错：拿不到 commands 服务时只记一条日志，插件其余功能照常。
+ * @param options.ctx cordis 上下文
+ * @param options.accessState 内存活状态（闸门读的就是它）
+ * @param options.log 日志器
+ * @returns 注销函数（拿不到命令服务时返回 undefined）
+ */
+function registerAccessCommand({ ctx, accessState, log }) {
+  const commands = (() => {
+    try {
+      return typeof ctx.get === 'function' ? ctx.get('commands') : ctx.commands
+    } catch {
+      return undefined
+    }
+  })()
+  if (commands === undefined || typeof commands.register !== 'function') {
+    log?.warn?.('commands service unavailable; /computer-use settings command not registered')
+    return undefined
+  }
+
+  const handler = async ({ rawInput }) => {
+    const parsed = parseCommandArguments(rawInput)
+    if (parsed.ok !== true) {
+      return { kind: 'error', text: `${parsed.message}\n用法：/computer-use [mode auto|ask|off] [subagents on|off]` }
+    }
+    try {
+      if (parsed.patch !== undefined) {
+        const next = { ...accessState, ...parsed.patch }
+        // 落盘在前：写失败就什么都不改，避免「界面显示已禁用、重启后又变回来」。
+        const fileConfig = await readConfig()
+        await writeConfig({ ...fileConfig, accessMode: next.accessMode, allowSubagents: next.allowSubagents })
+        accessState.accessMode = next.accessMode
+        accessState.allowSubagents = next.allowSubagents
+        log?.info?.(`computer-use access updated: ${describeSettings(next)}`)
+      }
+    } catch (error) {
+      return { kind: 'error', text: `写入配置失败：${error instanceof Error ? error.message : String(error)}` }
+    }
+    if (parsed.json === true) return { kind: 'success', text: settingsPayload(accessState) }
+    return { kind: 'success', text: describeSettings(accessState) }
+  }
+
+  try {
+    const dispose = commands.register({
+      name: 'computer-use',
+      description: '电脑操控设置：全自动 / 需要询问 / 禁用，以及是否允许子代理调用',
+      // 不把参数记进对话记录：设置点击属于配置操作，不该刷屏（`settingsPayload` 的
+      // JSON 也只给客户端读，不给人看）。
+      recordInput: false,
+      handler,
+    })
+    return dispose
+  } catch (error) {
+    log?.warn?.(`could not register /computer-use command: ${error instanceof Error ? error.message : String(error)}`)
+    return undefined
   }
 }
 

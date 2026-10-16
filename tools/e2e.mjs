@@ -214,6 +214,15 @@ const registry = {
   },
   __definitions: [],
   get(name) {
+    if (name === 'commands') {
+      // 真机闸门验收要用它来切设置：GUI 里点菜单和这里调 handler 是同一条路径。
+      return {
+        register(definition) {
+          registry.__commands.set(definition.name, definition)
+          return () => registry.__commands.delete(definition.name)
+        },
+      }
+    }
     if (name === 'attachments') {
       return {
         imageLimits: {
@@ -252,6 +261,7 @@ const registry = {
   on() {
     return () => {}
   },
+  __commands: new Map(),
 }
 
 let fixture
@@ -306,11 +316,20 @@ try {
     join(home, 'skills', 'computer-use', 'SKILL.md'),
   )
 
-  const call = async (name, args = {}, exec = {}) => {
+  // 真实调用总是带 agent（DSH 的注册表分发路径保证），这里也照做：
+  // 闸门用 `exec.agent.session.header` 判「主 Agent / 子代理」，不带 agent 的调用
+  // 在限制态下会被 fail-closed 拒绝——那是刻意的（见 src/access.js 的注释）。
+  const mainExec = () => ({
+    callId: `e2e-${Date.now()}`,
+    signal: new AbortController().signal,
+    agent: { id: 'e2e-main', session: { header: { id: 'e2e-main' } }, options: {} },
+  })
+
+  const call = async (name, args = {}, exec = mainExec()) => {
     const definition = definitionByName.get(name)
     if (definition === undefined) throw new Error(`no tool ${name}`)
     const before = attachments.length
-    // 与生产同款守卫（参数宽化校验 + 输出清洗 + 指示器），避免「测试路径」与「真实路径」分叉。
+    // 与生产同款守卫（参数宽化校验 + 闸门 + 输出清洗 + 指示器），避免「测试路径」与「真实路径」分叉。
     const value = await createGuardedExecute(definition, indicator)(args, exec)
     return { value, newAttachments: attachments.slice(before) }
   }
@@ -507,6 +526,84 @@ try {
     action: 'focus',
   })
   check('perform_action(focus) 报告 action_sent', performed.value.action_sent === true, performed.value.text.split('\n')[1])
+
+  section('访问闸门（真机）：禁用时真的点不动，放开后真的能点')
+  // 这一段验收「界面上的开关真的有效」：改设置 → 走同一条生产路径调用 → 看桌面有没有变。
+  // 判据用**夹具窗口标题**（外部事实，且用原生后端独立读取，不采信工具自己的返回值）——
+  // 「工具说被拒绝了、桌面却已经动过」是这类安全功能最危险的失败模式。
+  const settings = registry.__commands.get('computer-use')
+  check('注册了 /computer-use 命令（GUI 菜单走同一条路径）', settings !== undefined)
+  const titleBeforeGate = (await probeDesktopForInput(fixture.pid)).title
+
+  // 闸门这一段必须走**插件的注册定义**（`registry.__definitions` 里的 execute 就是生产包装），
+  // 不能再套一层本套件的包装：外层包装会先点亮指示器、内层闸门才拒绝，
+  // 于是「被拒绝的调用没有点亮指示器」这条会被测试自己弄成假失败。
+  // 生产里也只有一层包装——这里照生产来。
+  const callGuarded = async (name, args, exec = mainExec()) => {
+    const definition = definitionByName.get(name)
+    if (definition === undefined) throw new Error(`no tool ${name}`)
+    return await definition.execute(args, exec)
+  }
+
+  const offResult = await settings.handler({ rawInput: 'mode=off' })
+  check('切到禁用成功', offResult.kind === 'success' && /禁用/u.test(offResult.text), offResult.text)
+  // 浮层先收掉：前面的正常调用已经点亮过它，而它要等 60s 兜底才自动隐藏。
+  await indicator.hide()
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  const activityBeforeDenied = indicator.lastActivityAt
+  await assert.rejects(
+    callGuarded('left_click', { x: 300, y: 300 }),
+    (error) => error.code === 'CUA_DISABLED',
+    '禁用后必须拒绝，且是 CUA_DISABLED',
+  )
+  await assert.rejects(
+    callGuarded('get_app_state', { app: fixtureTarget }),
+    (error) => error.code === 'CUA_DISABLED',
+    '禁用后连只读工具也不放行（禁用就是禁用）',
+  )
+  const afterDenied = await indicator.status()
+  check(
+    '被拒绝的调用没有点亮操作指示器',
+    afterDenied.visible === false && indicator.lastActivityAt === activityBeforeDenied,
+    { visible: afterDenied.visible, activityChanged: indicator.lastActivityAt !== activityBeforeDenied },
+  )
+  const titleWhileOff = (await probeDesktopForInput(fixture.pid)).title
+  check('禁用期间窗口标题没变（桌面真的没被碰）', titleWhileOff === titleBeforeGate, {
+    before: titleBeforeGate,
+    after: titleWhileOff,
+  })
+
+  const restore = await settings.handler({ rawInput: 'mode=auto subagents=off' })
+  check('恢复「全自动 + 关闭子代理」', restore.kind === 'success', restore.text)
+  const subagent = {
+    callId: 'e2e-sub',
+    signal: new AbortController().signal,
+    agent: {
+      id: 'e2e-sub',
+      session: { header: { id: 'e2e-sub', origin: 'subagent', delegationDepth: 1, parentSession: 'e2e-main' } },
+      options: {},
+    },
+  }
+  await assert.rejects(
+    callGuarded('left_click', { x: 300, y: 300 }, subagent),
+    (error) => error.code === 'CUA_SUBAGENT_BLOCKED',
+    '同一设置下主 Agent 放行 ≠ 子代理放行',
+  )
+  check('子代理被单独拦住（主 Agent 可点、子代理不可点）', true)
+
+  const stateForGate = await call('get_app_state', { app: fixtureTarget })
+  const gateButton = stateForGate.value.elements.find((element) => element.name === 'FixtureButton')
+  const reopened = await call('left_click', {
+    element_index: gateButton.index,
+    state_id: stateForGate.value.state_id,
+  })
+  check('放开后主 Agent 的点击真的生效', reopened.value.action_sent === true, reopened.value.text.split('\n')[0])
+  await call('wait', { duration_ms: 300 })
+  const titleAfterReopen = (await probeDesktopForInput(fixture.pid)).title
+  check('窗口标题确实变了（说明前面拦住的那些调用没白拦）', titleAfterReopen !== titleBeforeGate, {
+    before: titleBeforeGate,
+    after: titleAfterReopen,
+  })
 
   section('未实现的工具路径：open_application 拒绝不存在的应用')
   await assert.rejects(

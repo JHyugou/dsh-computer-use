@@ -28,6 +28,25 @@ export const DEFAULT_CONFIG = {
   /** 是否把截图栅格落盘（`frames/`），便于用户事后查看。 */
   saveFrames: true,
   /**
+   * 谁能调用电脑操控（GUI 输入框那一行的「电脑操控」设置入口可直接改，改完**立即生效**，
+   * 不需要重启）：
+   *  - `auto`（默认）：有需求就直接执行；
+   *  - `ask`：每次调用前弹出 DSH 原生审批，只有用户点「允许一次」才执行；
+   *  - `off`：完全禁用——主 Agent 与子代理都拿不到执行权。
+   *
+   * 闸门在**每次工具调用时**判定，而不是在注册时——注册时判定的话，改设置就得重启，
+   * 而这个开关存在的意义正是「随时能关掉」。
+   */
+  accessMode: 'auto',
+  /**
+   * 是否允许**子代理**调用电脑操控（默认关闭）。
+   *
+   * 默认关闭的理由：子代理跑在用户看不到的上下文里，它去动用户的鼠标键盘时，
+   * 用户既不知道是谁在动、也不容易喊停；而且一次委派里它可能反复调用。
+   * 需要放权时在设置里打开即可。
+   */
+  allowSubagents: false,
+  /**
    * 是否把随包技能装到 `<dsh home>/skills/computer-use/SKILL.md`。
    * 该目录是 DSH 官方扫描根且被 watcher 监视，装好后新会话立即可见、无需重启。
    * 只会覆盖带本插件标记的文件；用户自己写过的同名技能不会被动。
@@ -152,6 +171,8 @@ export function normalizeConfig(raw, base = DEFAULT_CONFIG) {
   if (typeof raw.enabled === 'boolean') cfg.enabled = raw.enabled
   cfg.tools = oneOf(raw.tools, ['native', 'single'], cfg.tools)
   if (typeof raw.saveFrames === 'boolean') cfg.saveFrames = raw.saveFrames
+  cfg.accessMode = oneOf(raw.accessMode, ['auto', 'ask', 'off'], cfg.accessMode)
+  if (typeof raw.allowSubagents === 'boolean') cfg.allowSubagents = raw.allowSubagents
   if (typeof raw.installSkill === 'boolean') cfg.installSkill = raw.installSkill
   if (typeof raw.indicator === 'boolean') cfg.indicator = raw.indicator
   cfg.indicatorLocale = oneOf(raw.indicatorLocale, ['auto', 'zh-CN', 'en-US'], cfg.indicatorLocale)
