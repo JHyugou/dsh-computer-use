@@ -105,6 +105,8 @@ DSH 没有等价的 JS kernel 桥（它的 `node_repl` 类比物是 PTC `run_cod
 | 操作指示器 | `npm run indicator:smoke` | **54 通过 / 0 失败** | 点击穿透（`WindowFromPoint(卡片中心)` 不是浮窗）、不抢焦点（`GetForegroundWindow` 从不等于浮窗）、**不进截图**（与背景无关的 `PrintWindow` 判据 + 逐像素旁证）、30s 兜底隐藏、窗口复用、stdout 纯净度 |
 | 真实注册表 | `npm run verify:registry` | **10 通过 / 0 失败** | 在**真实 cordis + 真实 `dsh-tools` ToolRuntime + SystemPrompt** 里加载插件：投影出 25 个 schema、无 `execute`/`render` 泄漏、按名字可解析 |
 | 真实 DSH | `npm run verify:in-dsh` | **14 通过 / 0 失败** | 在**真实 DSH 的一次性运行**（`dsh --profile cu-verify --json`）里让模型自己走完整链路：加载技能 → `get_app_state` → 按 `element_index + state_id` `left_click` → `wait` → 复查 → `stop_computer_control`。**结论不采信模型汇报**：脚本用原生后端独立再读一次窗口标题，确认它真的变成了 `CLICKED:1` |
+| 真实 DSH·访问闸门 | `--access-mode=off` / `=ask` | **10 / 11 通过 / 0 失败** | **受控对照**：任务与上面完全相同，唯一差别是这一条设置。禁用场景：模型尝试调用 → 被拒（`CUA_DISABLED`，说明里含「桌面没有任何变化」）→ 模型停手 → **夹具标题一字未变**；询问场景在 headless 下无审批方可答 → 同样 fail-closed。这条同时**反证了调用方分类**：auto 场景下默认 `allowSubagents=false`，主 Agent 的调用被放行，说明真实的 `exec.agent.session.header` 判定正确 |
+| 客户端半 | 临时 web 实例 | 通过 | 另起一个临时 DSH web 实例（独立端口，用完即删）：启动清单里出现 `{"id":"dsh-computer-use","url":"plugins/??dsh-computer-use/client.js&rev=…"}`，bundle 路由返回 **200 / 9016 字节**且内容是本插件代码；界面上按钮 `🖱 电脑操控：全自动` 与菜单（子代理开关 + 三模式）正常渲染；点「禁用」后 `<dsh home>/plugins/dsh-computer-use/config.json` 真的被写成 `"accessMode": "off"`，点回「全自动」又写回 `auto` |
 
 端到端与真机验证都用**我们自己的 WPF 夹具窗口**（`tools/e2e-fixture.ps1`）作为目标：
 零用户数据风险，且它的可观察状态是确定的（文本框 value 可回读、按钮点击改窗口标题）。

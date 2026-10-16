@@ -116,13 +116,20 @@ npm run smoke                          # 147 通过：原生后端 24 个协议�
 npm run e2e                            # 74 通过：完整链路端到端（真机，含访问闸门验收）
 npm run indicator:smoke                # 54 通过：操作指示器三条硬性质（真机，见下）
 npm run verify:registry                # 10 通过：真实 cordis + 真实 dsh-tools 注册表加载
-npm run verify:in-dsh                  # 14 通过：真实 DSH 里让模型自己点一次按钮
+npm run verify:in-dsh                  # 14 通过：真实 DSH 里让模型自己点一次按钮（accessMode=auto）
+node tools/verify-in-dsh.mjs --patch=tools/verify-profile-patch.yml --access-mode=off   # 10 通过：禁用场景（桌面未被碰）
+node tools/verify-in-dsh.mjs --patch=tools/verify-profile-patch.yml --access-mode=ask   # 11 通过：询问场景（fail-closed）
 node tools/install-skill.mjs status    # 技能是否已进用户技能根
 ```
 
-> `npm run verify:in-dsh` 需要**模型账号可用**。若 provider 返回 `402 Insufficient
-> Balance`，这一层会因为「模型压根没跑起来」而全红——那不是插件的失败，看日志里的
-> `error.code === "QUOTA"` 就能区分。
+**关于 `--patch=tools/verify-profile-patch.yml`**：验证用的 `cu-verify` profile 来自出厂 headless
+模板，默认走 `DEEPSEEK_API_KEY`；该 key 余额耗尽后每次运行都返回 402（`error.code === "QUOTA"`），
+模型压根不启动，于是这一层会全红——那不是插件的失败。这个叠加层把模型路由指到可用的 provider
+（你桌面 profile 里正在用的那套），**通过 `dsh --patch` 叠加，不修改任何 profile 文件**。
+
+**关于 `--access-mode`**：三个场景跑的是**同一个任务**，唯一差别是这一条设置；判据用夹具窗口标题
+这个外部事实，而不是工具自己的返回值。`off`/`ask` 场景的期望是"被拒 + 桌面一字未变"，
+`auto` 场景的期望是"真的点成功"。
 
 `npm run indicator:smoke` 的两条判据（退出码 `0` 通过 / `1` 产品失败 / `2` 环境不稳定无法判定）：
 
@@ -302,6 +309,11 @@ Computer Use 真的会动用户的鼠标键盘，所以**必须有一个用户�
 训练/调试时若怀疑「设置了但没生效」，按 3 → 4 的顺序看：`request_access` 报的是宿主**当前**值，
 `config.json` 是**磁盘**值；两者不一致说明命令没走通（看日志里有没有
 `/computer-use` 注册失败的警告）。
+
+上面这四步在开发期已经用**一个临时 DSH web 实例**（独立端口，用完即删）走过一遍并留了证据：
+启动清单里出现 `{"id":"dsh-computer-use","url":"plugins/??dsh-computer-use/client.js&rev=…"}`、
+bundle 路由返回 200 且内容是本插件的代码、按钮与菜单正常渲染、点「禁用」后
+`config.json` 真的被写成 `"accessMode": "off"`。
 
 ---
 
