@@ -66,6 +66,9 @@ let round = 0
 // 先把要用的包本体放进扁平 layout（被测对象，不是依赖）。
 //  - dsh-tools：工具 schema 子集断言与参数校验语义
 //  - yaml / dsh-skill / dsh-skill-filesystem：技能 frontmatter 的真实解析器
+//  - dsh-client-modules：客户端插件清单（`dsh.client`）的官方校验器
+//  - dsh-subagent：官方 `delegationDepthOf`，用来核对我们判「子代理」的兜底字段没漂移
+//  - dsh-session：会话 header 字段的运行时定义（`origin` / `delegationDepth`）
 const SEED_PACKAGES = [
   '@deepseek-ai/dsh-tools',
   'yaml',
@@ -73,6 +76,9 @@ const SEED_PACKAGES = [
   '@deepseek-ai/dsh-skill-filesystem',
   '@deepseek-ai/dsh-home-paths',
   '@deepseek-ai/dsh-system-prompt',
+  '@deepseek-ai/dsh-client-modules',
+  '@deepseek-ai/dsh-subagent',
+  '@deepseek-ai/dsh-session',
 ]
 for (const specifier of SEED_PACKAGES) {
   if (extractPackage(specifier)) console.log(`extracted ${specifier}`)
