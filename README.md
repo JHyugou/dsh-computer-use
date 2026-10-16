@@ -288,6 +288,21 @@ Computer Use 真的会动用户的鼠标键盘，所以**必须有一个用户�
 /computer-use mode=off subagents=on    # 也可以一次提交两个字段
 ```
 
+**重启后自查（四步，每一步都有可核验的判据）**：
+
+1. 输入框那一行、紧挨「完全权限」芯片右侧应出现 `🖱 电脑操控：<模式>`；
+   看不到就先确认 `%USERPROFILE%\.dsh\profiles\desktop\package.json` 里有本插件、且重启后没有加载报错。
+2. 点开菜单选「禁用」，然后让模型做个 GUI 动作：应当**报 `CUA_DISABLED` 并明确说桌面没有任何变化**，
+   而屏幕上不会出现「DSH 正在操作电脑」浮层。
+3. 同时看 `request_access` 的输出：应当带 `access_mode="off" subagents="blocked"`
+   （这条是运行时可自查的凭据，界面改了设置这里立刻能看出来）。
+4. 在菜单里改回「全自动」，同一动作应当正常执行；`<dsh home>/plugins/dsh-computer-use/config.json`
+   里应出现 `"accessMode": "auto"`（设置确实落盘，不只是内存态）。
+
+训练/调试时若怀疑「设置了但没生效」，按 3 → 4 的顺序看：`request_access` 报的是宿主**当前**值，
+`config.json` 是**磁盘**值；两者不一致说明命令没走通（看日志里有没有
+`/computer-use` 注册失败的警告）。
+
 ---
 
 ## 6. 与上游的差异
