@@ -112,3 +112,34 @@ test('客户端半声明的 dsh.client.inject 里，每个包都真的是客户�
     )
   }
 })
+
+test('输入框那一行的槽位仍在、且仍在「完全权限」芯片之后渲染（按钮位置的前提）', async (t) => {
+  if (!existsSync(ASAR)) return t.skip(`找不到 app.asar：${ASAR}`)
+  const { listAsarEntries } = await import('../tools/asar.mjs')
+  const entries = listAsarEntries(ASAR)
+  const entry = entries.find(
+    (item) => item.path === 'dsh/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js',
+  )
+  if (entry === undefined) return t.skip('官方 conversation 客户端 bundle 不在 App 里')
+  const source = entry.buffer
+    .subarray(entry.dataStart + Number(entry.offset), entry.dataStart + Number(entry.offset) + entry.size)
+    .toString('utf8')
+
+  // 槽位名是硬契约：DSH 改名 = 我们的按钮**静默消失**（界面不会报任何错）。
+  assert.ok(
+    source.includes('"conversation.input.left"'),
+    '官方 InputBar 里不再渲染 conversation.input.left：本插件的按钮会消失，须跟随改名',
+  )
+  // 调用形态：无 owner props 的 renderSlot。形态变了，我们注册时注入 props 的方式就得跟着改。
+  assert.ok(
+    source.includes('renderSlot("conversation.input.left", {})'),
+    '官方对 conversation.input.left 的调用形态变了（不再是无 owner props 的 renderSlot）',
+  )
+  // 位置：必须排在 permission 芯片之后——用户要的「完全权限右侧」正是靠这个顺序成立的。
+  const permissionAt = source.indexOf('"conversation.input.permission"')
+  const leftAt = source.indexOf('"conversation.input.left"')
+  assert.ok(
+    permissionAt > 0 && leftAt > permissionAt,
+    'conversation.input.left 不再排在 permission 芯片之后，按钮位置会变',
+  )
+})
